@@ -18,7 +18,7 @@ export default class CarsScene extends Phaser.Scene {
 
     const leftX = this.car!.x + cos * -offset - sin * offset;
     const leftY = this.car!.y + sin * -offset + cos * offset;
-    
+
     const rightX = this.car!.x + cos * -offset + sin * offset;
     const rightY = this.car!.y + sin * -offset - cos * offset;
 
@@ -81,14 +81,16 @@ export default class CarsScene extends Phaser.Scene {
       carVelocity = Math.max(vel?.x ?? 0, vel?.y ?? 0) / 2;
     });
   }
-  update() {
+  update(time: number, delta: number) {
     // Rotation
+    const factor = delta / 20;
     const turnModifier = this.keys?.space.isDown ? 72 : 46;
-    if (carVelocity > 0.2 || carVelocity < -0.1) {
+
+    if (carVelocity * factor > 0.2 || carVelocity * factor < -0.1) {
       if (this.keys?.left.isDown) {
-        this.car?.setAngularVelocity(-turnModifier * 0.001);
+        this.car?.setAngularVelocity(-turnModifier * 0.001 * factor);
       } else if (this.keys?.right.isDown) {
-        this.car?.setAngularVelocity(turnModifier * 0.001);
+        this.car?.setAngularVelocity(turnModifier * 0.001 * factor);
       } else {
         this.car?.setAngularVelocity(0);
       }
@@ -97,17 +99,17 @@ export default class CarsScene extends Phaser.Scene {
     // Velocity
     if (this.keys?.up.isDown) {
       if (this.keys.space.isDown) {
-        this.car?.thrust(0.00015);
+        this.car?.thrust(0.00015 * factor);
       } else if (carVelocity <= 3) {
-        carVelocity += 0.02;
+        carVelocity += 0.02 * factor;
       }
     } else if (this.keys?.down.isDown) {
       if (carVelocity >= -1) {
-        carVelocity -= 0.02;
+        carVelocity -= 0.02 * factor;
       }
     } else if (this.keys?.space.isDown) {
       if (carVelocity !== 0) {
-        // carVelocity *= 0.8;
+        // carVelocity *= 0.8 * factor;
       }
     }
 
@@ -126,8 +128,8 @@ export default class CarsScene extends Phaser.Scene {
     const angle = this.car?.angle ?? 0;
 
     if (!this.keys?.space.isDown) {
-      this.car?.setVelocityX(carVelocity * Math.cos(angle * 0.01745));
-      this.car?.setVelocityY(carVelocity * Math.sin(angle * 0.01745));
+      this.car?.setVelocityX(carVelocity * Math.cos(angle * 0.01745) * factor);
+      this.car?.setVelocityY(carVelocity * Math.sin(angle * 0.01745) * factor);
     }
     const color = Phaser.Display.Color.GetColor(0, 0, 0);
     this.graphics?.clear();
@@ -135,8 +137,8 @@ export default class CarsScene extends Phaser.Scene {
 
     if (this.graphics) {
       this.skidmarks?.forEach((paths) => {
-        paths[0]?.draw(this.graphics!)
-        paths[1]?.draw(this.graphics!)
+        paths[0]?.draw(this.graphics!);
+        paths[1]?.draw(this.graphics!);
       });
     }
   }
