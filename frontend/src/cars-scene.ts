@@ -1,4 +1,3 @@
-import { CollisionManager } from './collision-manager';
 import { MultiplayerManager } from './multiplayer-manager';
 
 export default class CarsScene extends Phaser.Scene {
@@ -8,14 +7,12 @@ export default class CarsScene extends Phaser.Scene {
   private keys: Phaser.Types.Input.Keyboard.CursorKeys | undefined;
   private graphics: Phaser.GameObjects.Graphics | undefined;
   private skidmarks: [Phaser.Curves.Path[]] | undefined;
-  private collisionManager: CollisionManager | undefined;
-  private collisionGraphics: Phaser.GameObjects.Graphics | undefined;
   private showDebug = false;
-  private lastCollisionArea: string | null = null;
-  private wasInCollision = false;
   private multiplayerManager: MultiplayerManager | undefined;
   private connectionStatusText: Phaser.GameObjects.Text | undefined;
   private playerCountText: Phaser.GameObjects.Text | undefined;
+  private obstaclePhysicsBodies: MatterJS.BodyType[] = [];
+  private obstacleGraphics: Phaser.GameObjects.Graphics[] = [];
 
   getCarTiresPos() {
     const offset = 5;
@@ -34,113 +31,6 @@ export default class CarsScene extends Phaser.Scene {
     return {
       right: { x: leftX, y: leftY },
       left: { x: rightX, y: rightY },
-    };
-  }
-
-  getCollisionAreaCenter(area: any) {
-    const centerX = area.points.reduce((sum: number, p: any) => sum + p.x, 0) / area.points.length;
-    const centerY = area.points.reduce((sum: number, p: any) => sum + p.y, 0) / area.points.length;
-    return { x: centerX, y: centerY };
-  }
-
-  calculatePushDirection(carX: number, carY: number, collisionCenter: { x: number, y: number }) {
-    // Calculate direction vector from collision center to car
-    const dx = carX - collisionCenter.x;
-    const dy = carY - collisionCenter.y;
-    
-    // Normalize the direction vector
-    const distance = Math.sqrt(dx * dx + dy * dy);
-    
-    if (distance === 0) {
-      // If car is exactly at center, push in random direction
-      return { x: Math.random() - 0.5, y: Math.random() - 0.5 };
-    }
-    
-    return {
-      x: dx / distance,
-      y: dy / distance
-    };
-  }
-
-  /**
-   * Calculate the collision surface normal for proper reflection
-   */
-  getCollisionNormal(carX: number, carY: number, collisionArea: any): { x: number; y: number } {
-    const areaPoints = collisionArea.points;
-    let closestDistance = Infinity;
-    let surfaceNormal = { x: 0, y: -1 }; // Default upward normal
-    
-    // Find the closest edge to determine the surface normal
-    for (let i = 0; i < areaPoints.length; i++) {
-      const j = (i + 1) % areaPoints.length;
-      const p1 = areaPoints[i];
-      const p2 = areaPoints[j];
-      
-      // Calculate distance from car to this edge
-      const distance = this.distancePointToLineSegment(carX, carY, p1.x, p1.y, p2.x, p2.y);
-      
-      if (distance < closestDistance) {
-        closestDistance = distance;
-        
-        // Calculate edge vector
-        const edgeX = p2.x - p1.x;
-        const edgeY = p2.y - p1.y;
-        const edgeLength = Math.sqrt(edgeX * edgeX + edgeY * edgeY);
-        
-        if (edgeLength > 0) {
-          // Normal is perpendicular to edge
-          const normalX = -edgeY / edgeLength;
-          const normalY = edgeX / edgeLength;
-          
-          // Determine which direction the normal should point (outward from polygon)
-          const areaCenterX = areaPoints.reduce((sum: number, p: any) => sum + p.x, 0) / areaPoints.length;
-          const areaCenterY = areaPoints.reduce((sum: number, p: any) => sum + p.y, 0) / areaPoints.length;
-          
-          // Vector from area center to car
-          const toCenterX = carX - areaCenterX;
-          const toCenterY = carY - areaCenterY;
-          
-          // If normal points toward car, use it; otherwise flip it
-          if (normalX * toCenterX + normalY * toCenterY > 0) {
-            surfaceNormal = { x: normalX, y: normalY };
-          } else {
-            surfaceNormal = { x: -normalX, y: -normalY };
-          }
-        }
-      }
-    }
-    
-    return surfaceNormal;
-  }
-
-  /**
-   * Calculate distance from point to line segment
-   */
-  distancePointToLineSegment(px: number, py: number, x1: number, y1: number, x2: number, y2: number): number {
-    const dx = x2 - x1;
-    const dy = y2 - y1;
-    const lengthSquared = dx * dx + dy * dy;
-    
-    if (lengthSquared === 0) {
-      return Math.sqrt((px - x1) * (px - x1) + (py - y1) * (py - y1));
-    }
-    
-    const t = Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / lengthSquared));
-    const projectionX = x1 + t * dx;
-    const projectionY = y1 + t * dy;
-    
-    return Math.sqrt((px - projectionX) * (px - projectionX) + (py - projectionY) * (py - projectionY));
-  }
-
-  /**
-   * Reflect velocity vector against surface normal
-   */
-  reflectVelocity(velX: number, velY: number, normalX: number, normalY: number): { x: number; y: number } {
-    // Formula: reflected = velocity - 2 * (velocity · normal) * normal
-    const dotProduct = velX * normalX + velY * normalY;
-    return {
-      x: velX - 2 * dotProduct * normalX,
-      y: velY - 2 * dotProduct * normalY
     };
   }
 
@@ -173,15 +63,10 @@ export default class CarsScene extends Phaser.Scene {
       console.log('❌ Multiplayer connection failed:', error.message);
     });
 
-    // Initialize collision manager and graphics
-    this.collisionManager = new CollisionManager(this);
-    this.collisionGraphics = this.add.graphics();
-    this.collisionGraphics.setDepth(10);
-
-    // Load collision map data
+    // Create physics bodies for obstacles from collision map data
     const collisionData = this.cache.json.get('collisionMap');
     if (collisionData) {
-      this.collisionManager.loadCollisionMap(collisionData);
+      this.createPhysicsObstacles(collisionData);
     }
 
     this.background = this.add.image(400, 400, "background");
@@ -212,7 +97,7 @@ export default class CarsScene extends Phaser.Scene {
     this.add.text(10, 10, 'Press D to toggle collision debug view', {
       fontSize: '12px',
       color: '#ffffff',
-      backgroundColor: 'rgba(0, 0, 0, 0.5)', // 50% transparent black background
+      backgroundColor: 'rgba(0, 0, 0, 0.5)',
       padding: { x: 3, y: 3 }
     });
 
@@ -288,7 +173,7 @@ export default class CarsScene extends Phaser.Scene {
     const forceStrength = 0.0002 * (delta / 20); // Ultra sluggish! Reduced from 0.0004 to 0.0002 (50% reduction again)
     const maxSpeed = 2;
     
-    // Apply normal acceleration without timer blocking
+    // Apply normal acceleration
     if (this.keys?.up.isDown) {
       if (this.keys.space.isDown) {
         // Handbrake mode - same acceleration as normal (no speed boost)
@@ -304,8 +189,8 @@ export default class CarsScene extends Phaser.Scene {
       }
     }
     
-    // Apply friction when no input (but don't override collision bounces)
-    if (!this.keys?.up.isDown && !this.keys?.down.isDown && !this.wasInCollision) {
+    // Apply friction when no input
+    if (!this.keys?.up.isDown && !this.keys?.down.isDown) {
       const friction = 0.95;
       this.car?.setVelocity((currentVel?.x || 0) * friction, (currentVel?.y || 0) * friction);
     }
@@ -332,80 +217,6 @@ export default class CarsScene extends Phaser.Scene {
       });
     }
 
-    // Collision detection with houses
-    if (this.car && this.collisionManager) {
-      const carX = this.car.x;
-      const carY = this.car.y;
-      const carRadius = 12; // Reduced hitbox width by 3 pixels on each side
-      
-      const collision = this.collisionManager.isCircleInCollisionArea(carX, carY, carRadius);
-      
-      if (collision && !this.wasInCollision) {
-        // Car just entered a collision area - trigger bounce
-        console.log(`Car hit ${collision.name || collision.id}`);
-        
-        // Get current car velocity to determine bounce direction
-        const currentVel = this.car.getVelocity();
-        const velX = currentVel?.x || 0;
-        const velY = currentVel?.y || 0;
-        const velMagnitude = Math.sqrt(velX * velX + velY * velY);
-        
-        if (velMagnitude > 0.5) { // Only bounce if moving with some speed
-          // Calculate the surface normal of the collision
-          const surfaceNormal = this.getCollisionNormal(carX, carY, collision);
-          
-          // Reflect the velocity against the surface normal
-          const reflectedVel = this.reflectVelocity(velX, velY, surfaceNormal.x, surfaceNormal.y);
-          
-          // Apply reflected velocity with some energy loss (bounce dampening)
-          const bounceFactor = 0.08; // Reduced from 0.25 to 0.08 (another 2/3 reduction)
-          this.car.setVelocity(
-            reflectedVel.x * bounceFactor,
-            reflectedVel.y * bounceFactor
-          );
-          
-          // Also reflect the forward velocity direction based on car's angle vs surface normal
-          const carAngle = this.car.angle * (Math.PI / 180); // Convert to radians
-          const carForwardX = Math.cos(carAngle);
-          const carForwardY = Math.sin(carAngle);
-          
-          // Calculate how much the car's forward direction aligns with the surface normal
-          const forwardDotNormal = carForwardX * surfaceNormal.x + carForwardY * surfaceNormal.y;
-          
-          // Also reduce the car's momentum based on impact angle
-          const impactStrength = Math.abs(forwardDotNormal);
-          
-          // Apply counter-thrust to reduce forward momentum (reduced strength)
-          const counterThrustStrength = impactStrength * 0.002; // Reduced from 0.007 to 0.002
-          this.car?.thrust(-counterThrustStrength);
-          
-          // Small push along surface normal to prevent getting stuck (reduced)
-          const pushAmount = 1; // Reduced from 2 to 1
-          this.car.setPosition(
-            carX + surfaceNormal.x * pushAmount,
-            carY + surfaceNormal.y * pushAmount
-          );
-        } else {
-          // Even if moving slowly, apply strong friction to stop momentum
-          const currentVel = this.car.getVelocity();
-          this.car?.setVelocity((currentVel?.x || 0) * 0.3, (currentVel?.y || 0) * 0.3);
-        }
-        
-        this.wasInCollision = true;
-        this.lastCollisionArea = collision.id;
-      } else if (!collision && this.wasInCollision) {
-        // Car left collision area
-        this.wasInCollision = false;
-        this.lastCollisionArea = null;
-      }
-    }
-
-    // Debug visualization
-    if (this.showDebug && this.collisionManager && this.collisionGraphics) {
-      this.collisionManager.drawDebug(this.collisionGraphics);
-    } else if (this.collisionGraphics) {
-      this.collisionGraphics.clear();
-    }
 
     // Multiplayer updates
     this.updateMultiplayer();
@@ -438,14 +249,7 @@ export default class CarsScene extends Phaser.Scene {
         currentVel?.y || 0
       );
     }
-
-    // Send collision events
-    if (this.wasInCollision && this.lastCollisionArea) {
-      this.multiplayerManager.sendCollision({
-        areaId: this.lastCollisionArea,
-        position: { x: this.car.x, y: this.car.y }
-      });
-    }
+    
   }
 
   /**
@@ -455,5 +259,75 @@ export default class CarsScene extends Phaser.Scene {
     if (this.multiplayerManager) {
       this.multiplayerManager.destroy();
     }
+  }
+
+  /**
+   * Create physics bodies for obstacles from collision map data
+   */
+  private createPhysicsObstacles(collisionData: any): void {
+    console.log('Creating physics obstacles from collision data...');
+    
+    if (!collisionData.collisionAreas) {
+      console.warn('No collision areas found in collision data');
+      return;
+    }
+
+    collisionData.collisionAreas.forEach((area: any, index: number) => {
+      if (!area.points || area.points.length < 3) {
+        console.warn(`Skipping area ${area.id} - insufficient points`);
+        return;
+      }
+
+      try {
+        // Calculate bounding box for the polygon
+        const minX = Math.min(...area.points.map((p: any) => p.x));
+        const maxX = Math.max(...area.points.map((p: any) => p.x));
+        const minY = Math.min(...area.points.map((p: any) => p.y));
+        const maxY = Math.max(...area.points.map((p: any) => p.y));
+        
+        const width = maxX - minX;
+        const height = maxY - minY;
+        const centerX = minX + width / 2;
+        const centerY = minY + height / 2;
+
+        // Create a visible graphics object for the obstacle
+        const obstacleGraphic = this.add.graphics();
+        obstacleGraphic.fillStyle(0x8B4513, 0.7); // Brown color with transparency
+        obstacleGraphic.lineStyle(2, 0x654321); // Darker brown border
+        obstacleGraphic.fillRect(minX, minY, width, height);
+        obstacleGraphic.strokeRect(minX, minY, width, height);
+        obstacleGraphic.setDepth(1); // Behind car but above background
+
+        // Store the graphics object for later updates
+        this.obstacleGraphics.push(obstacleGraphic);
+
+        // Create a physics body for the same area
+        const obstacleBody = this.matter.add.rectangle(centerX, centerY, width, height, {
+          isStatic: true,
+          restitution: 0.8,  // Back to original moderate restitution
+          friction: 0.3,     // Back to original friction
+          frictionStatic: 0.5, // Back to original static friction
+          label: `obstacle_${area.id}`
+        });
+
+        this.obstaclePhysicsBodies.push(obstacleBody);
+        this.obstacleGraphics.push(obstacleGraphic);
+        
+        console.log(`Created physics obstacle: ${area.id} (${width}x${height})`);
+      } catch (error) {
+        console.error(`Failed to create physics body for area ${area.id}:`, error);
+      }
+    });
+
+    // Set up collision events
+    console.log(`Created ${this.obstaclePhysicsBodies.length} physics obstacles`);
+
+    // Add obstacle count text
+    this.add.text(10, 70, `Obstacles: ${this.obstaclePhysicsBodies.length}`, {
+      fontSize: '12px',
+      color: '#ffffff',
+      backgroundColor: 'rgba(0, 0, 0, 0.5)',
+      padding: { x: 3, y: 3 }
+    });
   }
 }
